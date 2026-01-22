@@ -84,4 +84,10 @@ export type FigmaCommand =
   | "group_nodes"
   | "ungroup_nodes"
   | "flatten_node"
-  | "insert_child";
+  | "insert_child"
+  | "get_reactions"
+  | "set_reactions"
+  | "add_reaction"
+  | "remove_reaction"
+  | "get_prototype_start_node"
+  | "set_prototype_start_node";

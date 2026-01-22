@@ -189,6 +189,18 @@ async function handleCommand(command, params) {
       return await createVector(params);
     case "create_line":
       return await createLine(params);
+    case "get_reactions":
+      return await getReactions(params);
+    case "set_reactions":
+      return await setReactions(params);
+    case "add_reaction":
+      return await addReaction(params);
+    case "remove_reaction":
+      return await removeReaction(params);
+    case "get_prototype_start_node":
+      return await getPrototypeStartNode(params);
+    case "set_prototype_start_node":
+      return await setPrototypeStartNode(params);
     default:
       throw new Error(`Unknown command: ${command}`);
   }
@@ -3292,4 +3304,505 @@ async function createLine(params) {
     vectorPaths: line.vectorPaths,
     parentId: line.parent ? line.parent.id : undefined
   };
+}
+
+// ============================================
+// Prototype Interaction Functions (Reactions, Triggers, Transitions)
+// ============================================
+
+/**
+ * Get all reactions (prototype interactions) from a node
+ * Reactions contain triggers (what initiates the action) and actions (what happens)
+ */
+async function getReactions(params) {
+  const { nodeId } = params || {};
+
+  if (!nodeId) {
+    throw new Error("Missing nodeId parameter");
+  }
+
+  const node = await figma.getNodeByIdAsync(nodeId);
+
+  if (!node) {
+    throw new Error(`Node not found with ID: ${nodeId}`);
+  }
+
+  // Check if node supports reactions (must be a SceneNode with reactions property)
+  if (!("reactions" in node)) {
+    throw new Error(`Node type "${node.type}" does not support prototype reactions`);
+  }
+
+  // Serialize reactions for transport (reactions contain readonly objects)
+  const reactions = node.reactions.map(reaction => serializeReaction(reaction));
+
+  return {
+    id: node.id,
+    name: node.name,
+    type: node.type,
+    reactions: reactions
+  };
+}
+
+/**
+ * Set all reactions on a node (replaces existing reactions)
+ */
+async function setReactions(params) {
+  const { nodeId, reactions } = params || {};
+
+  if (!nodeId) {
+    throw new Error("Missing nodeId parameter");
+  }
+
+  if (!reactions || !Array.isArray(reactions)) {
+    throw new Error("Missing or invalid reactions parameter");
+  }
+
+  const node = await figma.getNodeByIdAsync(nodeId);
+
+  if (!node) {
+    throw new Error(`Node not found with ID: ${nodeId}`);
+  }
+
+  if (!("reactions" in node)) {
+    throw new Error(`Node type "${node.type}" does not support prototype reactions`);
+  }
+
+  // Convert input reactions to Figma reaction format
+  const figmaReactions = reactions.map(reaction => buildReaction(reaction));
+
+  // Set the reactions on the node
+  node.reactions = figmaReactions;
+
+  return {
+    id: node.id,
+    name: node.name,
+    type: node.type,
+    reactions: node.reactions.map(r => serializeReaction(r))
+  };
+}
+
+/**
+ * Add a single reaction to a node without removing existing reactions
+ */
+async function addReaction(params) {
+  const { nodeId, trigger, action } = params || {};
+
+  if (!nodeId) {
+    throw new Error("Missing nodeId parameter");
+  }
+
+  if (!trigger) {
+    throw new Error("Missing trigger parameter");
+  }
+
+  if (!action) {
+    throw new Error("Missing action parameter");
+  }
+
+  const node = await figma.getNodeByIdAsync(nodeId);
+
+  if (!node) {
+    throw new Error(`Node not found with ID: ${nodeId}`);
+  }
+
+  if (!("reactions" in node)) {
+    throw new Error(`Node type "${node.type}" does not support prototype reactions`);
+  }
+
+  // Build the new reaction
+  const newReaction = buildReaction({ trigger, action });
+
+  // Add to existing reactions
+  node.reactions = [...node.reactions, newReaction];
+
+  return {
+    id: node.id,
+    name: node.name,
+    type: node.type,
+    reactions: node.reactions.map(r => serializeReaction(r))
+  };
+}
+
+/**
+ * Remove a reaction from a node by index
+ */
+async function removeReaction(params) {
+  const { nodeId, reactionIndex } = params || {};
+
+  if (!nodeId) {
+    throw new Error("Missing nodeId parameter");
+  }
+
+  if (reactionIndex === undefined || reactionIndex === null) {
+    throw new Error("Missing reactionIndex parameter");
+  }
+
+  const node = await figma.getNodeByIdAsync(nodeId);
+
+  if (!node) {
+    throw new Error(`Node not found with ID: ${nodeId}`);
+  }
+
+  if (!("reactions" in node)) {
+    throw new Error(`Node type "${node.type}" does not support prototype reactions`);
+  }
+
+  if (reactionIndex < 0 || reactionIndex >= node.reactions.length) {
+    throw new Error(`Invalid reaction index: ${reactionIndex}. Node has ${node.reactions.length} reactions.`);
+  }
+
+  // Remove the reaction at the specified index
+  const newReactions = [...node.reactions];
+  newReactions.splice(reactionIndex, 1);
+  node.reactions = newReactions;
+
+  return {
+    id: node.id,
+    name: node.name,
+    type: node.type,
+    reactions: node.reactions.map(r => serializeReaction(r))
+  };
+}
+
+/**
+ * Get the prototype start node for the current page
+ */
+async function getPrototypeStartNode(params) {
+  const startNode = figma.currentPage.prototypeStartNode;
+
+  if (startNode) {
+    return {
+      startNodeId: startNode.id,
+      startNodeName: startNode.name,
+      startNodeType: startNode.type
+    };
+  }
+
+  return {
+    startNodeId: null,
+    startNodeName: null,
+    startNodeType: null
+  };
+}
+
+/**
+ * Set the prototype start node for the current page
+ */
+async function setPrototypeStartNode(params) {
+  const { nodeId } = params || {};
+
+  if (nodeId === null || nodeId === undefined) {
+    // Clear the start node
+    figma.currentPage.prototypeStartNode = null;
+    return {
+      success: true,
+      startNodeId: null,
+      startNodeName: null
+    };
+  }
+
+  const node = await figma.getNodeByIdAsync(nodeId);
+
+  if (!node) {
+    throw new Error(`Node not found with ID: ${nodeId}`);
+  }
+
+  // Only certain node types can be prototype start nodes (typically frames)
+  if (node.type !== "FRAME" && node.type !== "COMPONENT" && node.type !== "COMPONENT_SET") {
+    throw new Error(`Node type "${node.type}" cannot be set as prototype start node. Only FRAME, COMPONENT, or COMPONENT_SET nodes are allowed.`);
+  }
+
+  figma.currentPage.prototypeStartNode = node;
+
+  return {
+    success: true,
+    startNodeId: node.id,
+    startNodeName: node.name
+  };
+}
+
+// ============================================
+// Helper functions for reactions/triggers/transitions
+// ============================================
+
+/**
+ * Serialize a Figma reaction for transport (converts readonly objects to plain objects)
+ */
+function serializeReaction(reaction) {
+  if (!reaction) return null;
+
+  return {
+    trigger: serializeTrigger(reaction.trigger),
+    action: serializeAction(reaction.action)
+  };
+}
+
+/**
+ * Serialize a trigger for transport
+ */
+function serializeTrigger(trigger) {
+  if (!trigger) return null;
+
+  const result = { type: trigger.type };
+
+  // Add type-specific properties
+  switch (trigger.type) {
+    case "AFTER_TIMEOUT":
+      result.timeout = trigger.timeout;
+      break;
+    case "MOUSE_UP":
+    case "MOUSE_DOWN":
+    case "MOUSE_ENTER":
+    case "MOUSE_LEAVE":
+      result.delay = trigger.delay;
+      break;
+    case "ON_KEY_DOWN":
+      result.device = trigger.device;
+      result.keyCodes = [...trigger.keyCodes];
+      break;
+    case "ON_MEDIA_HIT":
+      result.mediaHitTime = trigger.mediaHitTime;
+      break;
+    // ON_CLICK, ON_HOVER, ON_PRESS, ON_DRAG, ON_MEDIA_END have no additional properties
+  }
+
+  return result;
+}
+
+/**
+ * Serialize an action for transport
+ */
+function serializeAction(action) {
+  if (!action) return null;
+
+  const result = { type: action.type };
+
+  // Add common properties if present
+  if (action.destinationId !== undefined) {
+    result.destinationId = action.destinationId;
+  }
+
+  if (action.url !== undefined) {
+    result.url = action.url;
+  }
+
+  if (action.preserveScrollPosition !== undefined) {
+    result.preserveScrollPosition = action.preserveScrollPosition;
+  }
+
+  if (action.overlayRelativePosition !== undefined) {
+    result.overlayRelativePosition = {
+      x: action.overlayRelativePosition.x,
+      y: action.overlayRelativePosition.y
+    };
+  }
+
+  // Serialize transition if present
+  if (action.transition) {
+    result.transition = serializeTransition(action.transition);
+  }
+
+  // Add navigation-specific properties
+  if (action.navigation !== undefined) {
+    result.navigation = action.navigation;
+  }
+
+  return result;
+}
+
+/**
+ * Serialize a transition for transport
+ */
+function serializeTransition(transition) {
+  if (!transition) return null;
+
+  const result = {
+    type: transition.type,
+    duration: transition.duration,
+    easing: serializeEasing(transition.easing)
+  };
+
+  // Add direction for directional transitions
+  if (transition.direction !== undefined) {
+    result.direction = transition.direction;
+  }
+
+  // Add matchLayers for directional transitions
+  if (transition.matchLayers !== undefined) {
+    result.matchLayers = transition.matchLayers;
+  }
+
+  return result;
+}
+
+/**
+ * Serialize easing for transport
+ */
+function serializeEasing(easing) {
+  if (!easing) return null;
+
+  const result = { type: easing.type };
+
+  // Add custom easing properties
+  if (easing.type === "CUSTOM_CUBIC_BEZIER") {
+    result.x1 = easing.x1;
+    result.y1 = easing.y1;
+    result.x2 = easing.x2;
+    result.y2 = easing.y2;
+  } else if (easing.type === "CUSTOM_SPRING") {
+    result.mass = easing.mass;
+    result.stiffness = easing.stiffness;
+    result.damping = easing.damping;
+    result.initialVelocity = easing.initialVelocity;
+  }
+
+  return result;
+}
+
+/**
+ * Build a Figma reaction from input data
+ */
+function buildReaction(input) {
+  return {
+    trigger: buildTrigger(input.trigger),
+    action: buildAction(input.action)
+  };
+}
+
+/**
+ * Build a Figma trigger from input data
+ */
+function buildTrigger(input) {
+  if (!input || !input.type) {
+    throw new Error("Invalid trigger: missing type");
+  }
+
+  const trigger = { type: input.type };
+
+  // Add type-specific properties
+  switch (input.type) {
+    case "AFTER_TIMEOUT":
+      if (input.timeout === undefined) {
+        throw new Error("AFTER_TIMEOUT trigger requires timeout property");
+      }
+      trigger.timeout = input.timeout;
+      break;
+    case "MOUSE_UP":
+    case "MOUSE_DOWN":
+    case "MOUSE_ENTER":
+    case "MOUSE_LEAVE":
+      trigger.delay = input.delay || 0;
+      break;
+    case "ON_KEY_DOWN":
+      if (!input.device) {
+        throw new Error("ON_KEY_DOWN trigger requires device property");
+      }
+      if (!input.keyCodes || !Array.isArray(input.keyCodes)) {
+        throw new Error("ON_KEY_DOWN trigger requires keyCodes array");
+      }
+      trigger.device = input.device;
+      trigger.keyCodes = input.keyCodes;
+      break;
+    case "ON_MEDIA_HIT":
+      if (input.mediaHitTime === undefined) {
+        throw new Error("ON_MEDIA_HIT trigger requires mediaHitTime property");
+      }
+      trigger.mediaHitTime = input.mediaHitTime;
+      break;
+    // ON_CLICK, ON_HOVER, ON_PRESS, ON_DRAG, ON_MEDIA_END need no additional properties
+  }
+
+  return trigger;
+}
+
+/**
+ * Build a Figma action from input data
+ */
+function buildAction(input) {
+  if (!input || !input.type) {
+    throw new Error("Invalid action: missing type");
+  }
+
+  const action = { type: input.type };
+
+  // Add common properties if present
+  if (input.destinationId !== undefined) {
+    action.destinationId = input.destinationId;
+  }
+
+  if (input.url !== undefined) {
+    action.url = input.url;
+  }
+
+  if (input.preserveScrollPosition !== undefined) {
+    action.preserveScrollPosition = input.preserveScrollPosition;
+  }
+
+  if (input.overlayRelativePosition !== undefined) {
+    action.overlayRelativePosition = {
+      x: input.overlayRelativePosition.x,
+      y: input.overlayRelativePosition.y
+    };
+  }
+
+  // Build transition if present
+  if (input.transition) {
+    action.transition = buildTransition(input.transition);
+  }
+
+  if (input.navigation !== undefined) {
+    action.navigation = input.navigation;
+  }
+
+  return action;
+}
+
+/**
+ * Build a Figma transition from input data
+ */
+function buildTransition(input) {
+  if (!input || !input.type) {
+    throw new Error("Invalid transition: missing type");
+  }
+
+  const transition = {
+    type: input.type,
+    duration: input.duration || 300,
+    easing: buildEasing(input.easing)
+  };
+
+  // Add direction for directional transitions
+  if (["MOVE_IN", "MOVE_OUT", "PUSH", "SLIDE_IN", "SLIDE_OUT"].includes(input.type)) {
+    transition.direction = input.direction || "LEFT";
+    transition.matchLayers = input.matchLayers !== undefined ? input.matchLayers : false;
+  }
+
+  return transition;
+}
+
+/**
+ * Build a Figma easing from input data
+ */
+function buildEasing(input) {
+  if (!input || !input.type) {
+    // Default easing
+    return { type: "EASE_OUT" };
+  }
+
+  const easing = { type: input.type };
+
+  // Add custom easing properties
+  if (input.type === "CUSTOM_CUBIC_BEZIER") {
+    easing.x1 = input.x1 !== undefined ? input.x1 : 0.42;
+    easing.y1 = input.y1 !== undefined ? input.y1 : 0;
+    easing.x2 = input.x2 !== undefined ? input.x2 : 0.58;
+    easing.y2 = input.y2 !== undefined ? input.y2 : 1;
+  } else if (input.type === "CUSTOM_SPRING") {
+    easing.mass = input.mass !== undefined ? input.mass : 1;
+    easing.stiffness = input.stiffness !== undefined ? input.stiffness : 100;
+    easing.damping = input.damping !== undefined ? input.damping : 10;
+    easing.initialVelocity = input.initialVelocity !== undefined ? input.initialVelocity : 0;
+  }
+
+  return easing;
 }
